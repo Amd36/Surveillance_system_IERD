@@ -15,12 +15,12 @@ class WeaponDetector:
     """
 
     def __init__(self,
-                 model_path='exported_models/best-fp16-yolov5m.tflite',
+                 model_path='exported_models/previous_yolov5m.tflite',
                  classes_path='classes.txt',
                  input_size=(640, 640),
-                 confidence_threshold=0.5,
+                 confidence_threshold=0.7,
                  iou_threshold=0.4,
-                 display_scale=0.5):
+                 display_scale=0.75):
         self.model_path = model_path
         self.classes_path = classes_path
         self.input_size = input_size

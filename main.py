@@ -1,140 +1,209 @@
-import numpy as np
+import threading
+import time
+from typing import Optional
+from collections import defaultdict
+
 import cv2
-import tflite_runtime.interpreter as tflite
+import numpy as np
 from picamera2 import Picamera2
 
+# Local imports (files in the same folder)
+from face_recognition_live import FaceDetector, initialize_firebase_app, fetch_face_data
+from weapon_inference_from_camera import WeaponDetector
+import lock_control
 
-class WeaponDetector:
-    """Weapon detector wrapper around a TFLite YOLO model.
 
-    Methods:
-    - detect(frame): run inference and return detections
-    - annotate(frame, results, original_w, original_h): draw boxes on frame
-    - show_frame(frame, window_name='Detections'): display a smaller window
-    - run_camera_loop(): convenience to run live detection from PiCamera2
-    """
+def main():
+    # 1) Setup / initialization (take some time here)
+    print("Initializing system... setting up Firebase and detectors. This may take a few seconds...")
 
-    def __init__(self,
-                 model_path='exported_models/best-fp16-yolov5m.tflite',
-                 classes_path='classes.txt',
-                 input_size=(640, 640),
-                 confidence_threshold=0.5,
-                 iou_threshold=0.4,
-                 display_scale=0.5):
-        self.model_path = model_path
-        self.classes_path = classes_path
-        self.input_size = input_size
-        self.confidence_threshold = confidence_threshold
-        self.iou_threshold = iou_threshold
-        self.display_scale = display_scale
+    # Initialize Firebase (may raise on missing creds)
+    initialize_firebase_app()
 
-        # Load model
-        self.interpreter = tflite.Interpreter(model_path=self.model_path)
-        self.interpreter.allocate_tensors()
-        self.input_details = self.interpreter.get_input_details()
-        self.output_details = self.interpreter.get_output_details()
+    # Fetch known faces from Firebase
+    known_face_encodings, known_face_names = fetch_face_data()
+    print(f"Loaded {len(known_face_names)} known faces.")
 
-        # Load class names
-        with open(self.classes_path, 'r') as f:
-            self.class_names = [line.strip() for line in f.readlines()]
+    # Initialize detectors (heavy work - do before starting camera)
+    face_detector = FaceDetector(known_face_encodings=known_face_encodings,
+                                 known_face_names=known_face_names,
+                                 display_scale=0.5)
 
-    def preprocess(self, image):
-        original_height, original_width = image.shape[:2]
-        image_resized = cv2.resize(image, self.input_size)
-        image_resized = image_resized.astype(np.float32) / 255.0
-        input_data = np.expand_dims(image_resized, axis=0)
-        return input_data, original_width, original_height
+    weapon_detector = WeaponDetector(display_scale=0.5)
 
-    def non_max_suppression(self, detections):
-        boxes, confidences, class_ids = [], [], []
+    print("Detectors initialized. Starting camera and scheduler threads.")
 
-        for detection in detections:
-            box = detection[:4]
-            confidence = detection[4]
-            class_id = int(np.argmax(detection[5:])) if detection.shape[0] > 5 else 0
+    # Shared frame buffer and synchronization
+    latest_frame = {"frame": None}  # mutable container so threads can see updates
+    frame_lock = threading.Lock()
+    stop_event = threading.Event()
 
-            if confidence > self.confidence_threshold:
-                boxes.append(box)
-                confidences.append(float(confidence))
-                class_ids.append(class_id)
+    # Throttling dictionaries to avoid spamming prints
+    last_seen_time = defaultdict(lambda: 0.0)  # for faces
+    last_weapon_time = 0.0
+    # Lock control state
+    lock_engaged = False
+    lock_last_change_time = 0.0
+    # seconds to wait after last danger before unlocking
+    lock_unlock_delay = 10.0
 
-        if len(boxes) == 0:
-            return []
+    # Worker: face recognition
+    def face_worker(poll_interval: float = 0.5, welcome_cooldown: float = 5.0):
+        nonlocal latest_frame, stop_event, last_seen_time
+        print("Face worker started.")
+        while not stop_event.is_set():
+            # grab a copy of the latest frame
+            with frame_lock:
+                frame_copy = None if latest_frame["frame"] is None else latest_frame["frame"].copy()
 
-        # cv2.dnn.NMSBoxes expects boxes in [x,y,w,h] format; here boxes are center-based
-        # We keep the boxes as-is and let the existing index selection work similarly to before.
-        try:
-            indices = np.array(cv2.dnn.NMSBoxes(boxes, confidences, self.confidence_threshold, self.iou_threshold)).flatten()
-        except Exception:
-            # If NMSBoxes fails due to format, return all detections above threshold
-            return list(zip(boxes, confidences, class_ids))
+            if frame_copy is None:
+                time.sleep(0.05)
+                continue
 
-        return [(boxes[i], confidences[i], class_ids[i]) for i in indices]
-
-    def detect(self, frame):
-        """Run inference on a single frame.
-
-        Returns: results, original_width, original_height
-        """
-        input_data, original_width, original_height = self.preprocess(frame)
-        self.interpreter.set_tensor(self.input_details[0]['index'], input_data)
-        self.interpreter.invoke()
-        output_data = self.interpreter.get_tensor(self.output_details[0]['index'])
-        output_data = np.array(output_data)
-
-        # output_data shape may be (1, N, M) depending on model
-        detections = output_data[0] if output_data.ndim == 3 else output_data
-        results = self.non_max_suppression(detections)
-        return results, original_width, original_height
-
-    def annotate(self, image, results, original_width, original_height):
-        for box, confidence, class_id in results:
-            x_center, y_center, width, height = box
-            x_min = int((x_center - width / 2) * original_width)
-            y_min = int((y_center - height / 2) * original_height)
-            x_max = int((x_center + width / 2) * original_width)
-            y_max = int((y_center + height / 2) * original_height)
-
-            cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (255, 0, 0), 2)
-            label = f"{self.class_names[class_id]}: {confidence:.2f}"
-            cv2.putText(image, label, (x_min, max(y_min - 5, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
-
-        return image
-
-    def show_frame(self, frame, window_name='Detections'):
-        # make showing frame smaller for display
-        small = cv2.resize(frame, (0, 0), fx=self.display_scale, fy=self.display_scale)
-        cv2.imshow(window_name, small)
-
-    def run_camera_loop(self):
-        picam2 = Picamera2()
-        try:
-            picam2.preview_configuration.main.size = (1080, 720)
-            picam2.preview_configuration.main.format = "RGB888"
-            picam2.configure("preview")
-        except Exception:
-            # Fallback: try configure without changing preview config
+            # face_detector.detect expects an RGB frame
+            rgb = cv2.cvtColor(frame_copy, cv2.COLOR_BGR2RGB)
             try:
-                picam2.configure()
-            except Exception:
-                pass
+                detections = face_detector.detect(rgb)
+            except Exception as e:
+                # log and continue
+                print(f"Face worker error: {e}")
+                time.sleep(poll_interval)
+                continue
 
-        picam2.start()
+            now = time.time()
+            for top, right, bottom, left, name in detections:
+                if name and name != "Unknown":
+                    if now - last_seen_time[name] > welcome_cooldown:
+                        print(f"Welcome, {name}!")
+                        last_seen_time[name] = now
 
+            time.sleep(poll_interval)
+        print("Face worker stopped.")
+
+    # Worker: weapon detection
+    def weapon_worker(poll_interval: float = 0.3, danger_cooldown: float = 2.0):
+        nonlocal latest_frame, stop_event, last_weapon_time
+        nonlocal lock_engaged, lock_last_change_time
+        print("Weapon worker started.")
+        while not stop_event.is_set():
+            with frame_lock:
+                frame_copy = None if latest_frame["frame"] is None else latest_frame["frame"].copy()
+
+            if frame_copy is None:
+                time.sleep(0.05)
+                continue
+
+            try:
+                start = time.time()
+                results, ow, oh = weapon_detector.detect(frame_copy)
+                infer_time = time.time() - start
+            except Exception as e:
+                print(f"Weapon worker error: {e}")
+                time.sleep(poll_interval)
+                continue
+
+            now = time.time()
+            danger_detected = False
+            if results:
+                # Gather class names from results
+                detected_names = []
+                danger_detected = False
+                for box, conf, class_id in results:
+                    try:
+                        cname = weapon_detector.class_names[class_id]
+                    except Exception:
+                        cname = f"class_{class_id}"
+                    detected_names.append((cname, conf))
+                    # consider pistol and knife as danger — case-insensitive
+                    if cname.lower() in ("pistol", "knife"):
+                        danger_detected = True
+
+                # Only print once per cooldown
+                if now - last_weapon_time > danger_cooldown:
+                    names_str = ", ".join([f"{n}({c:.2f})" for n, c in detected_names])
+                    # print inference timing
+                    print(f"Weapon inference time: {infer_time*1000:.1f} ms")
+                    if danger_detected:
+                        print(f"DANGER: Weapon detected: {names_str}")
+                    else:
+                        print(f"Detected: {names_str}")
+                    last_weapon_time = now
+
+            # Lock control logic: engage immediately on danger, disengage after cooldown
+            try:
+                if danger_detected:
+                    if not lock_engaged:
+                        lock_control.lock_on()
+                        print("Lock engaged due to danger detection.")
+                        lock_engaged = True
+                        lock_last_change_time = now
+                else:
+                    if lock_engaged and (now - lock_last_change_time) > lock_unlock_delay:
+                        lock_control.lock_off()
+                        print("Lock disengaged (no danger).")
+                        lock_engaged = False
+                        lock_last_change_time = now
+            except Exception as e:
+                print(f"Lock control error: {e}")
+
+            time.sleep(poll_interval)
+        print("Weapon worker stopped.")
+
+    # Start worker threads
+    f_thread = threading.Thread(target=face_worker, name="FaceWorker", daemon=True)
+    w_thread = threading.Thread(target=weapon_worker, name="WeaponWorker", daemon=True)
+    f_thread.start()
+    w_thread.start()
+
+    # Start camera display loop (only raw feed shown)
+    picam2 = Picamera2()
+    try:
+        picam2.preview_configuration.main.size = (640, 480)
+        picam2.preview_configuration.main.format = "RGB888"
+        picam2.configure("preview")
+    except Exception:
         try:
-            while True:
-                frame = picam2.capture_array()
-                results, ow, oh = self.detect(frame)
-                annotated = self.annotate(frame, results, ow, oh)
-                self.show_frame(annotated)
+            picam2.configure()
+        except Exception:
+            pass
 
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
-        finally:
-            cv2.destroyAllWindows()
+    picam2.start()
+
+    print("Camera started. Press 'q' in the display window to quit.")
+
+    try:
+        while True:
+            frame = picam2.capture_array()
+            # display the raw feed (optionally scaled smaller for convenience)
+            display_scale = 0.7
+            small = cv2.resize(frame, (0, 0), fx=display_scale, fy=display_scale)
+            cv2.imshow("Camera Feed", small)
+
+            # update latest_frame for workers
+            with frame_lock:
+                latest_frame["frame"] = frame
+
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                print("Quit requested! Shutting down...")
+                break
+
+    finally:
+        # signal threads to stop and cleanup
+        stop_event.set()
+        f_thread.join(timeout=2.0)
+        w_thread.join(timeout=2.0)
+        try:
             picam2.stop()
+        except Exception:
+            pass
+        try:
+            # Ensure GPIO cleanup / lock cleanup on exit
+            lock_control.cleanup()
+        except Exception:
+            pass
+        cv2.destroyAllWindows()
+        print("Shutdown complete.")
 
 
-if __name__ == '__main__':
-    detector = WeaponDetector(display_scale=0.5)
-    detector.run_camera_loop()
+if __name__ == "__main__":
+    main()
