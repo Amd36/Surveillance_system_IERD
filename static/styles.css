@@ -1,0 +1,187 @@
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Space+Mono:wght@400;700&display=swap');
+
+:root {
+  --ink: #e9f1ed;
+  --muted: #83948c;
+  --line: rgba(169, 206, 187, 0.2);
+  --accent: #b9f227;
+  --background: #09100e;
+}
+
+* { box-sizing: border-box; }
+
+[hidden] { display: none !important; }
+
+html, body { margin: 0; min-height: 100%; }
+
+body {
+  background: var(--background);
+  color: var(--ink);
+  font-family: 'Space Mono', monospace;
+}
+
+.screen {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: clamp(14px, 2.2vh, 26px);
+  padding: clamp(18px, 3vw, 42px) clamp(20px, 5vw, 84px) clamp(16px, 2.5vh, 30px);
+  background:
+    linear-gradient(rgba(185, 242, 39, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(185, 242, 39, 0.025) 1px, transparent 1px),
+    radial-gradient(circle at 85% 0%, rgba(42, 89, 63, 0.3), transparent 34%),
+    var(--background);
+  background-size: 42px 42px, 42px 42px, auto, auto;
+}
+
+.header-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 48px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 14px;
+}
+
+.brand-mark {
+  width: 12px;
+  height: 12px;
+  background: var(--accent);
+  box-shadow: 7px 7px 0 rgba(185, 242, 39, 0.25);
+}
+
+h1 {
+  margin: 0;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: clamp(1.35rem, 2.4vw, 2.3rem);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.live-indicator {
+  margin-left: auto;
+  color: var(--accent);
+  font-size: clamp(0.65rem, 1vw, 0.8rem);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.wifi-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: clamp(0.65rem, 1vw, 0.8rem);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.wifi-indicator.connected { color: var(--accent); }
+.wifi-indicator.disconnected { color: #ef786f; }
+
+.wifi-icon {
+  position: relative;
+  width: 18px;
+  height: 14px;
+  overflow: hidden;
+}
+
+.wifi-icon::before,
+.wifi-icon::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  border: 2px solid currentColor;
+  border-bottom: 0;
+  border-radius: 16px 16px 0 0;
+  transform: translateX(-50%);
+}
+
+.wifi-icon::before { top: 0; width: 18px; height: 14px; }
+.wifi-icon::after { top: 5px; width: 9px; height: 7px; }
+
+.wifi-indicator.disconnected .wifi-icon::before,
+.wifi-indicator.disconnected .wifi-icon::after { opacity: 0.35; }
+
+.wifi-indicator.disconnected .wifi-icon {
+  background: linear-gradient(135deg, transparent 45%, currentColor 47%, currentColor 53%, transparent 55%);
+}
+
+.live-indicator span {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--accent);
+}
+
+.feed-frame {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #020504;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.3);
+}
+
+.feed-frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.feed-label {
+  position: absolute;
+  top: 16px;
+  left: 18px;
+  padding: 7px 10px;
+  background: rgba(5, 12, 9, 0.78);
+  color: var(--muted);
+  font-size: 0.65rem;
+  letter-spacing: 0.14em;
+}
+
+.camera-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--muted);
+  letter-spacing: 0.12em;
+  text-align: center;
+}
+
+.camera-error strong { color: #ef786f; font-size: clamp(1rem, 2vw, 1.4rem); }
+.camera-error span { font-size: clamp(0.6rem, 1vw, 0.75rem); letter-spacing: 0.04em; }
+.error-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 2px solid #ef786f;
+  border-radius: 50%;
+  color: #ef786f;
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+footer {
+  color: var(--muted);
+  font-size: clamp(0.65rem, 1vw, 0.78rem);
+  letter-spacing: 0.12em;
+  text-align: center;
+}
+
+@media (max-width: 700px) {
+  .screen { padding: 16px; }
+  .header-bar { gap: 10px; }
+  h1 { font-size: 1.25rem; }
+  .feed-frame { min-height: 55vh; }
+}

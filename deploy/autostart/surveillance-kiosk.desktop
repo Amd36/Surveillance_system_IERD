@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Intelligent Surveillance System kiosk
+Comment=Open the local surveillance web interface
+Exec=/home/ierd/Surveillance_system_IERD/scripts/start_kiosk.sh
+Terminal=false
+X-GNOME-Autostart-enabled=true

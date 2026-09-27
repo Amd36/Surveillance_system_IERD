@@ -1,0 +1,17 @@
+[Unit]
+Description=Intelligent Surveillance System web application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/ierd/Surveillance_system_IERD
+ExecStart=/home/ierd/Surveillance_system_IERD/venv/bin/python /home/pi/Surveillance_system_IERD/web_ui.py
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

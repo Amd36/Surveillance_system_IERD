@@ -114,6 +114,64 @@ General note: in all OpenCV windows, press `q` to quit.
 
 Run `camera_feed.py` to validate camera operation and libcamera/PiCamera2 configuration.
 
+### 1a) Run the kiosk web UI
+
+The separate Flask interface uses the camera settings in `config/camera.yaml` and
+serves the live feed at `http://localhost:5000`:
+
+```bash
+python web_ui.py
+```
+
+The UI can also run on a laptop without a camera. In that case it displays a
+camera-not-found state while keeping the Wi-Fi indicator and web server available.
+Install the dependencies first with `pip install -r requirements.txt`.
+
+### 1b) Start the UI automatically in kiosk mode
+
+The repository includes a boot script and service templates under `scripts/` and
+`deploy/`. These use the `pi` account and `/home/pi/Surveillance_system_IERD`.
+Replace those values if your Raspberry Pi uses a different username or checkout path.
+
+First install the required system packages and create the virtual environment:
+
+```bash
+sudo apt update
+sudo apt install -y git curl chromium-browser python3.11-venv
+python3.11 -m venv /home/pi/Surveillance_system_IERD/venv --system-site-packages
+```
+
+For Raspberry Pi OS versions where the browser package is named `chromium`, use
+`chromium` instead of `chromium-browser` in the commands and desktop file.
+
+Install the services:
+
+```bash
+sudo cp deploy/surveillance-web.service /etc/systemd/system/
+mkdir -p /home/pi/.config/autostart
+cp deploy/surveillance-kiosk.desktop /home/pi/.config/autostart/
+sudo chown -R pi:pi /home/pi/Surveillance_system_IERD /home/pi/.config
+sudo systemctl daemon-reload
+sudo systemctl enable --now surveillance-web.service
+```
+
+The web service fetches `origin/main` at every boot, fast-forwards when updates
+are available, installs the current requirements, and starts the app. If GitHub
+is temporarily unreachable, it keeps using the last local version. Chromium
+waits for `/status` before opening the kiosk page.
+
+Check or stop the service with:
+
+```bash
+systemctl status surveillance-web.service
+journalctl -u surveillance-web.service -f
+sudo systemctl disable --now surveillance-web.service
+```
+
+The first boot requires the Pi to have network access. A public repository needs
+no Git credentials; a private repository requires an SSH deploy key or another
+non-interactive Git authentication method.
+
 ### 2) Enroll a person’s face (upload to Firebase)
 
 Run `update_known_faces.py`:

@@ -1,0 +1,10 @@
+[Unit]
+Description=Update Intelligent Surveillance System from Git
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/home/ierd/Surveillance_system_IERD/scripts/update_repo.sh
