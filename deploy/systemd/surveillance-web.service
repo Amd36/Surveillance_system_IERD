@@ -5,10 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-Group=pi
+User=ierd
+Group=ierd
 WorkingDirectory=/home/ierd/Surveillance_system_IERD
-ExecStart=/home/ierd/Surveillance_system_IERD/venv/bin/python /home/pi/Surveillance_system_IERD/web_ui.py
+ExecStart=/home/ierd/Surveillance_system_IERD/venv/bin/python /home/ierd/Surveillance_system_IERD/web_ui.py
 Restart=on-failure
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1

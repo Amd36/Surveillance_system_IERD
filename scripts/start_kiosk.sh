@@ -15,4 +15,5 @@ exec chromium \
     --disable-session-crashed-bubble \
     --no-first-run \
     --start-maximized \
+    --password-store=basic \
     "$APP_URL"
