@@ -1,0 +1,33 @@
+camera:
+  width: 1280
+  height: 720
+  format: RGB888
+  jpeg_quality: 88
+
+face_recognition:
+  poll_interval: 0.5
+  result_max_age: 4.0
+
+weapon_detection:
+  model_path: exported_models/yolov5m.tflite
+  classes_path: classes.txt
+  input_width: 640
+  input_height: 640
+  confidence_threshold: 0.7
+  iou_threshold: 0.4
+  poll_interval: 0.3
+  result_max_age: 4.0
+
+lock_control:
+  lock_pin: 23
+  indicator_led_pin: 24
+  lock_active_low: true
+  indicator_led_on_when_locked: true
+  unlock_duration: 5.0
+  weapon_hold_duration: 10.0
+  weapon_scan_max_age: 4.0
+  face_confirmations: 2
+  face_confirmation_window: 3.0
+  face_rearm_delay: 2.0
+  unlock_modes:
+    - full

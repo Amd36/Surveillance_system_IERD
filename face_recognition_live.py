@@ -1,5 +1,7 @@
 import json
 import time
+from pathlib import Path
+
 import firebase_admin
 from firebase_admin import credentials, db
 import numpy as np
@@ -10,10 +12,18 @@ from picamera2 import Picamera2
 
 # Function to initialize Firebase app
 def initialize_firebase_app():
-    cred = credentials.Certificate(
+    try:
+        return firebase_admin.get_app()
+    except ValueError:
+        pass
+
+    credential_path = Path(__file__).with_name(
         "surveillance01-a38c9-firebase-adminsdk-fbsvc-fdc94e32a1.json"
+    )
+    cred = credentials.Certificate(
+        str(credential_path)
     )  # Replace with your Firebase service account key
-    firebase_admin.initialize_app(cred, {
+    return firebase_admin.initialize_app(cred, {
         'databaseURL': 'https://surveillance01-a38c9-default-rtdb.asia-southeast1.firebasedatabase.app/'
     })
 
@@ -74,8 +84,8 @@ class FaceDetector:
     def annotate(self, frame, detections):
         """Draw bounding boxes and names onto a BGR frame."""
         for top, right, bottom, left, name in detections:
-            cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-            cv2.putText(frame, name, (left, max(top - 10, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.rectangle(frame, (left, top), (right, bottom), (250, 213, 109), 2)
+            cv2.putText(frame, name, (left, max(top - 10, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (250, 213, 109), 2)
         return frame
 
     def show_feed(self):

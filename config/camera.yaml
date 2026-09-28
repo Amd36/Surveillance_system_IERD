@@ -1,5 +1,0 @@
-camera:
-  width: 1280
-  height: 720
-  format: RGB888
-  jpeg_quality: 88

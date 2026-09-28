@@ -73,8 +73,8 @@ def run_face_recognition(known_face_encodings, known_face_names):
                 if matches[best_match_index]:
                     name = known_face_names[best_match_index]
 
-            cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-            cv2.putText(frame, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.rectangle(frame, (left, top), (right, bottom), (250, 213, 109), 2)
+            cv2.putText(frame, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (250, 213, 109), 2)
             trigger_lock(name)
 
         cv2.imshow("Face Recognition", frame)

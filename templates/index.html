@@ -11,6 +11,9 @@
       <header class="header-bar">
         <div class="brand-mark" aria-hidden="true"></div>
         <h1>Intelligent Surveillance System</h1>
+        <div class="fps-indicator" aria-label="Camera capture rate">
+          <span id="fps-value">--</span> FPS
+        </div>
         <div class="live-indicator"><span></span> LIVE</div>
         <div class="wifi-indicator" aria-label="Wi-Fi status">
           <span class="wifi-icon" aria-hidden="true"></span>
@@ -18,59 +21,281 @@
         </div>
       </header>
 
-      <section class="feed-frame" aria-label="Live camera feed">
-        <img id="camera-feed" src="{{ url_for('video_feed') }}" alt="Live camera feed">
-        <div id="camera-error" class="camera-error" hidden>
-          <div class="error-icon" aria-hidden="true">!</div>
-          <strong>CAMERA NOT FOUND</strong>
-          <span>Connect the Picamera2 device to view the live feed.</span>
-        </div>
-        <div class="feed-label">CAMERA 01</div>
-      </section>
+      <div class="workspace">
+        <section class="feed-frame" aria-label="Live camera feed">
+          <img id="camera-feed" alt="Live camera feed">
+          <div id="camera-error" class="camera-error">
+            <div class="error-icon" aria-hidden="true">…</div>
+            <strong id="feed-status-title">STARTING SYSTEM</strong>
+            <span id="feed-status-message">Waiting for the camera pipeline.</span>
+          </div>
+          <div class="feed-label">CAMERA 01 · <span id="feed-mode">STARTING</span></div>
+        </section>
+
+        <aside class="control-panel" aria-label="Surveillance controls">
+          <div class="panel-heading">
+            <span>CONTROL</span>
+            <span id="state-dot" class="state-dot"></span>
+          </div>
+
+          <label for="mode-select">Mode</label>
+          <div class="select-wrap">
+            <select id="mode-select">
+              {% for value, label in modes.items() %}
+              <option value="{{ value }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <button id="enable-mode" type="button">ENABLE MODE</button>
+
+          <div class="mode-status" aria-live="polite">
+            <span class="status-label">SYSTEM STATUS</span>
+            <strong id="mode-state">INITIALIZING</strong>
+            <span id="mode-message">Preparing Raw Feed</span>
+          </div>
+
+          <div class="detection-box" aria-live="polite">
+            <span class="status-label">LIVE DETECTIONS</span>
+            <div id="detection-list" class="detection-list">
+              <span class="no-detections">No detections</span>
+            </div>
+            <div class="access-summary">
+              <strong id="access-state">LOCKED</strong>
+              <span id="access-reason">Fail-secure startup</span>
+            </div>
+          </div>
+
+          <dl class="metrics">
+            <div>
+              <dt>ACTIVE</dt>
+              <dd id="active-mode">—</dd>
+            </div>
+            <div>
+              <dt>FACE</dt>
+              <dd id="face-time">—</dd>
+            </div>
+            <div>
+              <dt>WEAPON</dt>
+              <dd id="weapon-time">—</dd>
+            </div>
+            <div>
+              <dt>LOCK</dt>
+              <dd id="lock-state">UNKNOWN</dd>
+            </div>
+          </dl>
+        </aside>
+      </div>
 
       <footer>Made by AMD36</footer>
     </main>
+
     <script>
       const feed = document.getElementById('camera-feed');
       const cameraError = document.getElementById('camera-error');
+      const feedStatusTitle = document.getElementById('feed-status-title');
+      const feedStatusMessage = document.getElementById('feed-status-message');
+      const feedMode = document.getElementById('feed-mode');
+      const fpsValue = document.getElementById('fps-value');
       const wifiIndicator = document.querySelector('.wifi-indicator');
-      let cameraConnected = false;
+      const liveIndicator = document.querySelector('.live-indicator');
+      const modeSelect = document.getElementById('mode-select');
+      const enableButton = document.getElementById('enable-mode');
+      const modeState = document.getElementById('mode-state');
+      const modeMessage = document.getElementById('mode-message');
+      const detectionList = document.getElementById('detection-list');
+      const accessState = document.getElementById('access-state');
+      const accessReason = document.getElementById('access-reason');
+      const stateDot = document.getElementById('state-dot');
+      const activeMode = document.getElementById('active-mode');
+      const faceTime = document.getElementById('face-time');
+      const weaponTime = document.getElementById('weapon-time');
+      const lockState = document.getElementById('lock-state');
 
-      function refreshFeed() {
-        feed.src = `{{ url_for('video_feed') }}?t=${Date.now()}`;
+      let streamMode = null;
+      let selectionTouched = false;
+
+      const transitioningStates = new Set(['stopping', 'initializing', 'starting']);
+
+      function refreshFeed(mode) {
+        streamMode = mode;
+        feed.src = `{{ url_for('video_feed') }}?mode=${mode}&t=${Date.now()}`;
       }
 
-      function showCameraError() {
+      function setFeedUnavailable(title, message, isError = false) {
         feed.hidden = true;
         cameraError.hidden = false;
+        cameraError.classList.toggle('failed', isError);
+        feedStatusTitle.textContent = title;
+        feedStatusMessage.textContent = message;
       }
 
-      function updateStatus() {
-        fetch("{{ url_for('status') }}", { cache: 'no-store' })
-          .then(response => response.json())
-          .then(status => {
-            cameraError.hidden = status.camera.connected;
-            if (status.camera.connected && !cameraConnected) {
-              refreshFeed();
-            }
-            if (!status.camera.connected) {
-              showCameraError();
-            }
-            cameraConnected = status.camera.connected;
-            wifiIndicator.classList.toggle('connected', status.wifi.connected);
-            wifiIndicator.classList.toggle('disconnected', !status.wifi.connected);
-            wifiIndicator.title = status.wifi.connected ? 'Wi-Fi connected' : 'Wi-Fi disconnected';
-          })
-          .catch(() => wifiIndicator.classList.add('disconnected'));
+      function formatMetric(value) {
+        return value === null || value === undefined ? '—' : `${Number(value).toFixed(1)} ms`;
       }
+
+      function formatLockState(state) {
+        if (state === 'unlocked') return 'OPEN';
+        if (state === 'locked') return 'CLOSED';
+        if (state === 'face_pending') return 'CLOSED · VERIFYING';
+        if (state === 'weapon_hold') return 'CLOSED · ALERT';
+        if (state === 'fault') return 'CLOSED · FAULT';
+        return 'UNAVAILABLE';
+      }
+
+      function renderDetections(detections = {}) {
+        detectionList.replaceChildren();
+        const faces = detections.faces || [];
+        const weapons = detections.weapons || [];
+
+        faces.forEach(name => {
+          const row = document.createElement('div');
+          const type = document.createElement('span');
+          const value = document.createElement('strong');
+          type.textContent = 'FACE';
+          value.textContent = name;
+          row.append(type, value);
+          detectionList.append(row);
+        });
+
+        weapons.forEach(detection => {
+          const row = document.createElement('div');
+          const type = document.createElement('span');
+          const value = document.createElement('strong');
+          type.textContent = 'WEAPON';
+          value.textContent = `${detection.name} · ${Math.round(detection.confidence * 100)}%`;
+          row.append(type, value);
+          detectionList.append(row);
+        });
+
+        if (!faces.length && !weapons.length) {
+          const empty = document.createElement('span');
+          empty.className = 'no-detections';
+          empty.textContent = 'No detections';
+          detectionList.append(empty);
+        }
+      }
+
+      function renderStatus(status) {
+        const camera = status.camera;
+        const access = status.access || {};
+        const transitioning = transitioningStates.has(status.state);
+        const ready = status.state === 'ready' && camera.connected;
+        const failed = status.state === 'error';
+
+        if (!selectionTouched && status.requested) {
+          modeSelect.value = status.requested;
+        }
+
+        modeSelect.disabled = transitioning;
+        enableButton.disabled = transitioning;
+        enableButton.classList.toggle('working', transitioning);
+        enableButton.classList.toggle(
+          'ready',
+          ready && modeSelect.value === status.active
+        );
+        enableButton.classList.toggle('failed', failed);
+
+        if (transitioning) {
+          enableButton.textContent = `${status.state.toUpperCase()} · ${status.transition_elapsed.toFixed(1)}s`;
+        } else if (ready && modeSelect.value === status.active) {
+          enableButton.textContent = 'MODE ENABLED';
+        } else if (failed) {
+          enableButton.textContent = 'RETRY MODE';
+        } else {
+          enableButton.textContent = 'ENABLE MODE';
+        }
+
+        modeState.textContent = status.state.toUpperCase();
+        modeMessage.textContent = status.error || status.message;
+        stateDot.className = `state-dot ${status.state}`;
+        activeMode.textContent = status.active_label || '—';
+        faceTime.textContent = formatMetric(camera.face_inference_ms);
+        weaponTime.textContent = formatMetric(camera.weapon_inference_ms);
+        renderDetections(camera.detections);
+        lockState.textContent = formatLockState(status.lock);
+        lockState.className = status.lock;
+        accessState.textContent = formatLockState(access.state || status.lock);
+        accessState.className = access.state || status.lock;
+        accessReason.textContent = access.remaining_seconds > 0
+          ? `${access.reason} · ${Number(access.remaining_seconds).toFixed(1)}s`
+          : access.reason || 'Waiting for access policy';
+        feedMode.textContent = status.active_label || status.requested_label;
+
+        fpsValue.textContent = ready ? Number(camera.fps).toFixed(1) : '--';
+        liveIndicator.classList.toggle('offline', !ready);
+        wifiIndicator.classList.toggle('connected', status.wifi.connected);
+        wifiIndicator.classList.toggle('disconnected', !status.wifi.connected);
+        wifiIndicator.title = status.wifi.connected
+          ? 'Wi-Fi connected'
+          : 'Wi-Fi disconnected';
+
+        if (ready) {
+          cameraError.hidden = true;
+          feed.hidden = false;
+          if (streamMode !== status.active || !feed.src) {
+            refreshFeed(status.active);
+          }
+        } else if (failed) {
+          streamMode = null;
+          setFeedUnavailable('MODE FAILED', status.error || status.message, true);
+        } else {
+          streamMode = null;
+          setFeedUnavailable(
+            status.state.toUpperCase(),
+            `${status.message} · ${status.transition_elapsed.toFixed(1)}s`
+          );
+        }
+      }
+
+      async function updateStatus() {
+        try {
+          const response = await fetch("{{ url_for('status') }}", { cache: 'no-store' });
+          if (!response.ok) throw new Error('Status request failed');
+          renderStatus(await response.json());
+        } catch (error) {
+          fpsValue.textContent = '--';
+          wifiIndicator.classList.add('disconnected');
+          setFeedUnavailable('SERVER OFFLINE', 'Waiting for the surveillance service.', true);
+        }
+      }
+
+      modeSelect.addEventListener('change', () => {
+        selectionTouched = true;
+        enableButton.classList.remove('ready', 'failed');
+        enableButton.textContent = 'ENABLE MODE';
+      });
+
+      enableButton.addEventListener('click', async () => {
+        enableButton.disabled = true;
+        enableButton.classList.add('working');
+        enableButton.textContent = 'REQUESTING…';
+        try {
+          const response = await fetch("{{ url_for('change_mode') }}", {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: modeSelect.value }),
+          });
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.error || 'Mode change failed');
+          selectionTouched = false;
+        } catch (error) {
+          enableButton.disabled = false;
+          enableButton.classList.remove('working');
+          enableButton.classList.add('failed');
+          enableButton.textContent = 'REQUEST FAILED';
+          modeMessage.textContent = error.message;
+        }
+        updateStatus();
+      });
 
       feed.addEventListener('error', () => {
-        cameraConnected = false;
-        showCameraError();
-        setTimeout(updateStatus, 500);
+        streamMode = null;
+        setFeedUnavailable('STREAM PAUSED', 'Waiting for the selected mode.');
       });
+
       updateStatus();
-      setInterval(updateStatus, 5000);
+      setInterval(updateStatus, 1000);
     </script>
   </body>
 </html>

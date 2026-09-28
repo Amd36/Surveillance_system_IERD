@@ -1,23 +1,15 @@
 import atexit
 import os
-import threading
-import time
 from pathlib import Path
-from typing import Any, Optional
 
-import cv2
-import yaml
-from flask import Flask, Response, jsonify, render_template
+from flask import Flask, Response, jsonify, render_template, request
+
+from surveillance_runtime import MODE_LABELS, ModeController
 
 
 app = Flask(__name__)
-CONFIG_PATH = Path(__file__).parent / "config" / "camera.yaml"
-
-
-def load_camera_config() -> dict[str, Any]:
-    with CONFIG_PATH.open(encoding="utf-8") as config_file:
-        config = yaml.safe_load(config_file) or {}
-    return config.get("camera", {})
+mode_controller = ModeController(initial_mode="raw")
+atexit.register(mode_controller.shutdown)
 
 
 def wifi_connected() -> bool:
@@ -46,162 +38,55 @@ def wifi_connected() -> bool:
         return False
 
 
-class CameraUnavailable:
-    error = "Camera not found. Connect a Picamera2 device to start the feed."
-    connected = False
-
-    def frames(self):
-        return
-
-    def stop(self) -> None:
-        return
-
-
-class CameraStream:
-    def __init__(self, config: dict[str, Any]) -> None:
-        from picamera2 import Picamera2
-
-        size = (int(config.get("width", 1280)), int(config.get("height", 720)))
-        self.camera = Picamera2()
-        self.camera.configure(
-            self.camera.create_preview_configuration(
-                main={"size": size, "format": "RGB888"}
-            )
-        )
-        self.frame: Optional[bytes] = None
-        self.condition = threading.Condition()
-        self.running = True
-        self.error: Optional[str] = None
-        self.connected = False
-        self.ready = threading.Event()
-        self.jpeg_quality = int(config.get("jpeg_quality", 88))
-        self.camera.start()
-        self.thread = threading.Thread(target=self._capture_frames, daemon=True)
-        self.thread.start()
-
-    def _capture_frames(self) -> None:
-        while self.running:
-            try:
-                frame = self.camera.capture_array()
-                # Match camera_feed.py: Picamera2's RGB888 frame is encoded directly.
-                success, encoded = cv2.imencode(
-                    ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
-                )
-                if success:
-                    with self.condition:
-                        self.frame = encoded.tobytes()
-                        self.connected = True
-                        self.ready.set()
-                        self.condition.notify_all()
-            except Exception as error:
-                self.error = f"{CameraUnavailable.error} ({error})"
-                self.connected = False
-                self.running = False
-                try:
-                    self.camera.stop()
-                except Exception:
-                    pass
-                with self.condition:
-                    self.condition.notify_all()
-
-    def frames(self):
-        last_frame = None
-        while self.running:
-            with self.condition:
-                self.condition.wait_for(
-                    lambda: self.frame is not None and self.frame != last_frame,
-                    timeout=1.0,
-                )
-                frame = self.frame
-
-            if frame is None:
-                continue
-
-            last_frame = frame
-            yield (
-                b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n"
-                b"Cache-Control: no-cache\r\n\r\n"
-                + frame
-                + b"\r\n"
-            )
-
-    def stop(self) -> None:
-        self.running = False
-        with self.condition:
-            self.condition.notify_all()
-        self.camera.stop()
-
-
-camera_lock = threading.Lock()
-
-
-def create_camera_stream() -> CameraStream | CameraUnavailable:
-    try:
-        stream = CameraStream(load_camera_config())
-        if stream.ready.wait(timeout=5.0):
-            return stream
-        stream.stop()
-        unavailable = CameraUnavailable()
-        unavailable.error = "Camera not found. No valid frame was received within 5 seconds."
-        return unavailable
-    except Exception as error:
-        unavailable = CameraUnavailable()
-        unavailable.error = f"{unavailable.error} ({error})"
-        return unavailable
-
-
-def camera_reconnect_worker() -> None:
-    global camera_stream
-    while True:
-        with camera_lock:
-            connected = camera_stream.connected
-        if not connected:
-            replacement = create_camera_stream()
-            # CameraStream becomes connected only after its first valid JPEG.
-            if replacement.connected:
-                with camera_lock:
-                    old_stream = camera_stream
-                    camera_stream = replacement
-                old_stream.stop()
-            elif isinstance(replacement, CameraStream):
-                replacement.stop()
-        time.sleep(3)
-
-
-try:
-    camera_stream = create_camera_stream()
-except Exception:
-    camera_stream = CameraUnavailable()
-atexit.register(camera_stream.stop)
-threading.Thread(target=camera_reconnect_worker, daemon=True).start()
-
-
 @app.get("/")
 def index() -> str:
-    return render_template("index.html")
+    return render_template("index.html", modes=MODE_LABELS)
 
 
 @app.get("/video_feed")
 def video_feed() -> Response:
-    with camera_lock:
-        stream = camera_stream
-    if not stream.connected:
-        return Response(stream.error, status=503, mimetype="text/plain")
+    runtime = mode_controller.ready_runtime()
+    if runtime is None:
+        return Response(
+            "The selected surveillance mode is not ready.",
+            status=503,
+            mimetype="text/plain",
+        )
     return Response(
-        stream.frames(),
+        runtime.frames(),
         mimetype="multipart/x-mixed-replace; boundary=frame",
     )
 
 
+@app.post("/mode")
+def change_mode() -> Response:
+    payload = request.get_json(silent=True) or {}
+    mode = payload.get("mode")
+    if mode not in MODE_LABELS:
+        return jsonify(error="Select a valid surveillance mode."), 400
+
+    try:
+        started = mode_controller.request_mode(mode)
+    except RuntimeError as error:
+        return jsonify(error=str(error)), 409
+
+    return jsonify(
+        accepted=True,
+        changed=started,
+        mode=mode,
+        message=(
+            f"Starting {MODE_LABELS[mode]}."
+            if started
+            else f"{MODE_LABELS[mode]} is already active."
+        ),
+    ), 202 if started else 200
+
+
 @app.get("/status")
 def status() -> Response:
-    with camera_lock:
-        stream = camera_stream
-    return jsonify(
-        camera={"connected": stream.connected, "error": stream.error},
-        wifi={"connected": wifi_connected()},
-    )
+    system_status = mode_controller.status()
+    system_status["wifi"] = {"connected": wifi_connected()}
+    return jsonify(system_status)
 
 
 if __name__ == "__main__":

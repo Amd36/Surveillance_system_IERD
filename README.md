@@ -29,189 +29,150 @@ The system is designed for on‑device inference on a Raspberry Pi 5 (ARM64), us
 
 ## Hardware and OS requirements
 
-- Raspberry Pi 5 (recommended) with 64‑bit Raspberry Pi OS (Bullseye/Bookworm) and libcamera
-- Raspberry Pi Camera Module (v2, HQ, or compatible) connected and enabled
-- Internet connectivity (required for Firebase operations)
-- Optional: HDMI display/monitor or VNC for viewing OpenCV windows
+- Raspberry Pi 5 running 64-bit Raspberry Pi OS with libcamera/Picamera2
+- Raspberry Pi Camera Module or compatible Picamera2 device
+- Waveshare 7-inch 1024×600 HDMI touchscreen
+- GPIO-controlled lock relay or driver circuit
+- Lock-state indicator LED
+- Network connectivity for Firebase face embeddings
 
-## Project structure
+GPIO uses BCM numbering. The defaults are BCM 23 for the active-low lock output
+and BCM 24 for the indicator LED. The LED is illuminated while the commanded
+lock state is closed. A relay or suitable driver must isolate the Raspberry Pi
+from the lock's power circuit.
 
-```
-camera_feed.py                      # Minimal camera preview using PiCamera2 + OpenCV
-face_recognition_live.py            # Live face recognition using embeddings from Firebase
-update_known_faces.py               # Capture a face, compute embedding, upload to Firebase
-weapon_inference_from_camera.py     # YOLOv5 TFLite weapon/object detection from camera
-classes.txt                         # Class labels for the YOLOv5 TFLite model
-requirements.txt                    # Python dependencies (targeted for Raspberry Pi)
-exported_models/
-    ├── best-fp16-yolov5m.tflite      # YOLOv5 Medium (FP16) TFLite
-    └── best-fp16-yolov5n.tflite      # YOLOv5 Nano   (FP16) TFLite
-```
+## System design
 
-## Models and classes
+The application uses one camera owner, a serialized mode controller, independent
+inference workers, and one access-policy controller. Detection workers never
+write directly to GPIO. They publish observations to the access policy, which is
+the only component allowed to request a lock-state change.
 
-- TFLite models are provided under `exported_models/`.
-    - `best-fp16-yolov5n.tflite`: smaller, faster, lower accuracy
-    - `best-fp16-yolov5m.tflite`: larger, slower, higher accuracy
-- Detection classes are defined in `classes.txt` (one per line):
-    - pistol, smartphone, knife, wallet, billete, card
-
-## Setup and installation (Raspberry Pi)
-
-Your existing steps above create a Python 3.11 virtual environment and install the Python packages.
-
-Optional system preparation on Raspberry Pi (only if needed):
-
-```
-# Optional: ensure camera stack and PiCamera2 are present
-sudo apt update
-sudo apt install -y libcamera-apps
-sudo apt install -y python3-picamera2
-
-# Reboot after enabling the camera in raspi-config if you haven’t already
+```mermaid
+flowchart LR
+    UI[1024×600 kiosk UI] -->|POST /mode| MC[ModeController]
+    UI -->|GET /status| MC
+    MC --> RT[SurveillanceRuntime]
+    RT --> CAM[Picamera2 capture worker]
+    CAM --> FB[Latest-frame buffer]
+    FB --> FACE[Face worker]
+    FB --> WEAPON[Weapon worker]
+    FACE --> POLICY[AccessPolicyController]
+    WEAPON --> POLICY
+    POLICY --> GPIO[lock_control.py]
+    GPIO --> LOCK[Lock relay]
+    GPIO --> LED[Indicator LED]
+    FACE --> OUT[Annotated MJPEG output]
+    WEAPON --> OUT
+    OUT --> UI
+    FIREBASE[Firebase embeddings] --> FACE
 ```
 
-Notes:
+### Runtime components
 
-- `picamera2` is included in `requirements.txt` but is also available via apt. Prefer apt on Raspberry Pi if you run into wheel/build issues.
-- `tflite-runtime` is pinned in `requirements.txt`. If installation fails, install the appropriate prebuilt wheel for your Pi/OS, or use the package from the Raspberry Pi repository when available.
+| Component | Responsibility |
+|---|---|
+| `web_ui.py` | Flask routes, MJPEG response, status API, and mode-selection API |
+| `ModeController` | Serializes mode changes and prevents concurrent camera owners |
+| `SurveillanceRuntime` | Owns Picamera2, frame publication, inference workers, annotations, and metrics |
+| `FaceDetector` | Matches faces against Firebase embeddings and produces named detections |
+| `WeaponDetector` | Runs YOLOv5 TFLite inference and produces class/confidence detections |
+| `AccessPolicyController` | Fuses face and weapon observations into lock decisions |
+| `lock_control.py` | Drives the configured lock and LED pins and records commanded state |
+| `system_config.yaml` | Defines camera, detector, timing, model, and GPIO policy values |
 
-## Configuration
+The camera worker assigns a monotonically increasing sequence number to each
+frame. Inference workers wait for a newer sequence and therefore do not process
+the same frame repeatedly. Full System mode runs face and weapon inference
+independently so a slow model does not block camera capture or the other worker.
 
-Face recognition and embedding sync rely on Firebase Realtime Database. You need a Firebase service account key JSON file and your database URL.
+### Operating modes
 
-Where to configure:
+| Mode | Camera | Face inference | Weapon inference | Lock behavior |
+|---|---:|---:|---:|---|
+| Raw Feed | Yes | No | No | Preserves the current command |
+| Face Recognition | Yes | Yes | No | Diagnostic only; cannot unlock |
+| Weapon Detection | Yes | No | Yes | Can lock on pistol or knife; cannot unlock |
+| Full System | Yes | Yes | Yes | Can grant timed face access; weapons override immediately |
 
-- `update_known_faces.py`
-    - Service account JSON file path
-    - Realtime Database URL
-- `face_recognition_live.py`
-    - Service account JSON file path
-    - Realtime Database URL
+The configured mode is not marked ready until its camera is producing frames and
+every required inference worker has completed at least one successful pass.
 
-By default, the scripts expect a service account file like:
+## Mode-controller finite-state machine
 
-```
-surveillance01-a38c9-firebase-adminsdk-fbsvc-fdc94e32a1.json
-```
-
-You can either rename your downloaded key to match this filename and place it in the project root, or edit the scripts to point to your actual file name and database URL.
-
-Realtime Database structure expected by this project:
-
-```
-face_embeddings/
-    <person_name>:
-        name: "<person_name>"
-        embedding: [<128-d or 128+-d face encoding array>]
-```
-
-## Usage
-
-General note: in all OpenCV windows, press `q` to quit.
-
-### 1) Preview the camera
-
-Run `camera_feed.py` to validate camera operation and libcamera/PiCamera2 configuration.
-
-### 1a) Run the kiosk web UI
-
-The separate Flask interface uses the camera settings in `config/camera.yaml` and
-serves the live feed at `http://localhost:5000`:
-
-```bash
-python web_ui.py
+```mermaid
+stateDiagram-v2
+    [*] --> Initializing
+    Initializing --> Starting: detectors loaded
+    Starting --> Ready: camera and required workers ready
+    Ready --> Stopping: different mode requested
+    Stopping --> Initializing: workers joined and camera closed
+    Initializing --> Error: initialization failure
+    Starting --> Error: camera or first-inference failure
+    Ready --> Stopping: runtime failure
+    Stopping --> Error: cleanup completed after failure
+    Error --> Initializing: retry or new mode requested
 ```
 
-The UI can also run on a laptop without a camera. In that case it displays a
-camera-not-found state while keeping the Wi-Fi indicator and web server available.
-Install the dependencies first with `pip install -r requirements.txt`.
+Only one transition may execute at a time. During a transition, the access
+policy is placed in a non-unlocking transition mode. The old workers are
+signalled, joined, and the camera is closed before the next runtime opens it. If
+a worker cannot stop safely, the next mode is not started.
 
-### 1b) Start the UI automatically in kiosk mode
+## Access-control finite-state machine
 
-The repository includes a boot script and service templates under `scripts/` and
-`deploy/`. These use the `pi` account and `/home/pi/Surveillance_system_IERD`.
-Replace those values if your Raspberry Pi uses a different username or checkout path.
+The access policy starts fail-secure with a commanded closed lock. All enrolled
+Firebase identities are currently treated as authorized identities.
 
-First install the required system packages and create the virtual environment:
-
-```bash
-sudo apt update
-sudo apt install -y git curl chromium-browser python3.11-venv
-python3.11 -m venv /home/pi/Surveillance_system_IERD/venv --system-site-packages
+```mermaid
+stateDiagram-v2
+    [*] --> Locked: fail-secure startup
+    Locked --> FacePending: recognized face in Full System
+    FacePending --> Unlocked: required confirmations and fresh safe weapon scan
+    FacePending --> Locked: confirmation expires
+    Unlocked --> Locked: access window expires
+    Locked --> WeaponHold: pistol or knife detected
+    FacePending --> WeaponHold: pistol or knife detected
+    Unlocked --> WeaponHold: pistol or knife detected
+    WeaponHold --> Locked: hold expires; fresh face required
+    Locked --> Fault: camera, inference, or GPIO failure
+    FacePending --> Fault: camera, inference, or GPIO failure
+    Unlocked --> Fault: camera, inference, or GPIO failure
+    WeaponHold --> Fault: camera, inference, or GPIO failure
+    Fault --> Locked: healthy runtime successfully replaces faulted runtime
 ```
 
-For Raspberry Pi OS versions where the browser package is named `chromium`, use
-`chromium` instead of `chromium-browser` in the commands and desktop file.
+### Access rules and timing
 
-Install the services:
+- A face must be recognized twice within the configured three-second
+  confirmation window.
+- Full System must also have a non-stale weapon scan before access is granted.
+- A successful authorization opens the lock for five seconds.
+- The same continuously visible face cannot repeatedly reopen the lock. Face
+  authorization rearms after the face has been absent for two seconds.
+- A pistol or knife observation closes the lock immediately from any access
+  state and refreshes a ten-second weapon hold.
+- When the weapon hold expires, the system remains closed and requires a new
+  face authorization.
+- Camera, worker, model, or GPIO failures command the lock closed.
+- Mode changes do not create a second camera owner or allow a starting face-only
+  pipeline to inherit Full System's unlock permission.
 
-```bash
-sudo cp deploy/surveillance-web.service /etc/systemd/system/
-mkdir -p /home/pi/.config/autostart
-cp deploy/surveillance-kiosk.desktop /home/pi/.config/autostart/
-sudo chown -R pi:pi /home/pi/Surveillance_system_IERD /home/pi/.config
-sudo systemctl daemon-reload
-sudo systemctl enable --now surveillance-web.service
-```
+## State reporting
 
-The web service fetches `origin/main` at every boot, fast-forwards when updates
-are available, installs the current requirements, and starts the app. If GitHub
-is temporarily unreachable, it keeps using the last local version. Chromium
-waits for `/status` before opening the kiosk page.
+`/status` exposes the active/requested mode, transition state, capture FPS,
+inference timings, current detections, access-policy state, reason, countdown,
+GPIO availability, configured pins, and commanded lock state.
 
-Check or stop the service with:
+The UI represents access state as:
 
-```bash
-systemctl status surveillance-web.service
-journalctl -u surveillance-web.service -f
-sudo systemctl disable --now surveillance-web.service
-```
+| Policy state | UI meaning |
+|---|---|
+| `locked` | `CLOSED` |
+| `face_pending` | `CLOSED · VERIFYING` |
+| `unlocked` | `OPEN` |
+| `weapon_hold` | `CLOSED · ALERT` |
+| `fault` | `CLOSED · FAULT` |
 
-The first boot requires the Pi to have network access. A public repository needs
-no Git credentials; a private repository requires an SSH deploy key or another
-non-interactive Git authentication method.
-
-### 2) Enroll a person’s face (upload to Firebase)
-
-Run `update_known_faces.py`:
-
-- Prompts for a name
-- Shows a short countdown, captures a frame
-- Extracts a face embedding via `face_recognition`
-- Uploads the embedding to Firebase under `face_embeddings/<name>`
-
-If no face is detected, it will print a message and not upload.
-
-### 3) Real‑time face recognition
-
-Run `face_recognition_live.py`:
-
-- Pulls all embeddings from Firebase at startup
-- Runs live face detection and recognition on camera frames
-- Draws bounding boxes and names; shows a running FPS overlay
-
-Tip: The more complete your enrollment images (lighting/pose), the better the recognition.
-
-### 4) Real‑time weapon/object detection
-
-Run `weapon_inference_from_camera.py`:
-
-- Loads the YOLOv5 FP16 TFLite model (by default `best-fp16-yolov5m.tflite`)
-- Preprocesses frames to 640×640 and runs inference on‑device
-- Applies Non‑Maximum Suppression (NMS) and draws labeled boxes
-
-You can switch to the nano model by changing `model_path` in the script to `best-fp16-yolov5n.tflite` for higher FPS (potentially lower accuracy).
-
-## Performance and accuracy notes
-
-- Input resolution is 640×640; ensure good lighting and camera focus
-- Confidence and IoU thresholds in NMS can be tuned for your environment
-- Model choice (`yolov5n` vs `yolov5m`) trades accuracy for speed on the Pi
-
-
-## Acknowledgements
-
-- Raspberry Pi and the PiCamera2/libcamera stack
-- YOLO family of models and the broader open‑source community
-- `face_recognition` by Adam Geitgey (built on dlib)
+The displayed value is the state commanded by software. Confirming that the
+physical mechanism actually moved requires a separate lock-position sensor.

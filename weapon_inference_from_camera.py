@@ -15,7 +15,7 @@ class WeaponDetector:
     """
 
     def __init__(self,
-                 model_path='exported_models/previous_yolov5m.tflite',
+                 model_path='exported_models/yolov5n.tflite',
                  classes_path='classes.txt',
                  input_size=(640, 640),
                  confidence_threshold=0.7,
@@ -40,31 +40,52 @@ class WeaponDetector:
 
     def preprocess(self, image):
         original_height, original_width = image.shape[:2]
-        image_resized = cv2.resize(image, self.input_size)
-        image_resized = image_resized.astype(np.float32) / 255.0
-        input_data = np.expand_dims(image_resized, axis=0)
-        return input_data, original_width, original_height
+        input_width, input_height = self.input_size
+        scale = min(input_width / original_width, input_height / original_height)
+        resized_width = max(1, int(round(original_width * scale)))
+        resized_height = max(1, int(round(original_height * scale)))
+        resized = cv2.resize(image, (resized_width, resized_height))
+        canvas = np.full((input_height, input_width, 3), 114, dtype=np.uint8)
+        pad_x = (input_width - resized_width) // 2
+        pad_y = (input_height - resized_height) // 2
+        canvas[pad_y:pad_y + resized_height, pad_x:pad_x + resized_width] = resized
+        input_data = np.expand_dims(canvas.astype(np.float32) / 255.0, axis=0)
+        transform = (scale, pad_x, pad_y)
+        return input_data, original_width, original_height, transform
 
     def non_max_suppression(self, detections):
-        boxes, confidences, class_ids = [], [], []
+        boxes, nms_boxes, confidences, class_ids = [], [], [], []
 
         for detection in detections:
             box = detection[:4]
-            confidence = detection[4]
-            class_id = int(np.argmax(detection[5:])) if detection.shape[0] > 5 else 0
+            objectness = float(detection[4])
+            class_scores = detection[5:]
+            class_id = int(np.argmax(class_scores)) if len(class_scores) else 0
+            class_score = float(class_scores[class_id]) if len(class_scores) else 1.0
+            confidence = objectness * class_score
 
             if confidence > self.confidence_threshold:
                 boxes.append(box)
+                x_center, y_center, width, height = box
+                nms_boxes.append([
+                    float(x_center - width / 2),
+                    float(y_center - height / 2),
+                    float(width),
+                    float(height),
+                ])
                 confidences.append(float(confidence))
                 class_ids.append(class_id)
 
         if len(boxes) == 0:
             return []
 
-        # cv2.dnn.NMSBoxes expects boxes in [x,y,w,h] format; here boxes are center-based
-        # We keep the boxes as-is and let the existing index selection work similarly to before.
         try:
-            indices = np.array(cv2.dnn.NMSBoxes(boxes, confidences, self.confidence_threshold, self.iou_threshold)).flatten()
+            indices = np.array(cv2.dnn.NMSBoxes(
+                nms_boxes,
+                confidences,
+                self.confidence_threshold,
+                self.iou_threshold,
+            )).flatten()
         except Exception:
             # If NMSBoxes fails due to format, return all detections above threshold
             return list(zip(boxes, confidences, class_ids))
@@ -76,7 +97,7 @@ class WeaponDetector:
 
         Returns: results, original_width, original_height
         """
-        input_data, original_width, original_height = self.preprocess(frame)
+        input_data, original_width, original_height, transform = self.preprocess(frame)
         self.interpreter.set_tensor(self.input_details[0]['index'], input_data)
         self.interpreter.invoke()
         output_data = self.interpreter.get_tensor(self.output_details[0]['index'])
@@ -85,7 +106,27 @@ class WeaponDetector:
         # output_data shape may be (1, N, M) depending on model
         detections = output_data[0] if output_data.ndim == 3 else output_data
         results = self.non_max_suppression(detections)
-        return results, original_width, original_height
+
+        scale, pad_x, pad_y = transform
+        input_width, input_height = self.input_size
+        mapped_results = []
+        for box, confidence, class_id in results:
+            x_center, y_center, width, height = box
+            x_center = (float(x_center) * input_width - pad_x) / scale
+            y_center = (float(y_center) * input_height - pad_y) / scale
+            width = float(width) * input_width / scale
+            height = float(height) * input_height / scale
+            mapped_results.append((
+                np.array([
+                    x_center / original_width,
+                    y_center / original_height,
+                    width / original_width,
+                    height / original_height,
+                ]),
+                confidence,
+                class_id,
+            ))
+        return mapped_results, original_width, original_height
 
     def annotate(self, image, results, original_width, original_height):
         for box, confidence, class_id in results:
@@ -95,8 +136,20 @@ class WeaponDetector:
             x_max = int((x_center + width / 2) * original_width)
             y_max = int((y_center + height / 2) * original_height)
 
+            x_min = max(0, min(original_width - 1, x_min))
+            y_min = max(0, min(original_height - 1, y_min))
+            x_max = max(0, min(original_width - 1, x_max))
+            y_max = max(0, min(original_height - 1, y_max))
+            if x_max <= x_min or y_max <= y_min:
+                continue
+
             cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (255, 0, 0), 2)
-            label = f"{self.class_names[class_id]}: {confidence:.2f}"
+            class_name = (
+                self.class_names[class_id]
+                if 0 <= class_id < len(self.class_names)
+                else f"class_{class_id}"
+            )
+            label = f"{class_name}: {confidence:.2f}"
             cv2.putText(image, label, (x_min, max(y_min - 5, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
 
         return image
