@@ -9,8 +9,8 @@ face_recognition:
   result_max_age: 4.0
 
 weapon_detection:
-  model_path: exported_models/yolov5m.tflite
-  classes_path: classes.txt
+  model_path: exported_models/yolo26s.tflite
+  classes_path: classes_yolo26.txt
   input_width: 640
   input_height: 640
   confidence_threshold: 0.7
