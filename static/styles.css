@@ -678,12 +678,15 @@ footer {
 
 /* Recording replaces the detection list only while Raw Feed is active. */
 #recording-controls {
+  display: flex;
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  flex-direction: column;
+  overflow: hidden;
 }
 .recording-actions {
   display: flex;
+  flex-shrink: 0;
   gap: 5px;
 }
 .recording-actions button {
@@ -694,6 +697,8 @@ footer {
 }
 #recording-status {
   display: block;
+  min-height: 0;
+  overflow-y: auto;
   margin-top: 3px;
   color: var(--muted);
   font-size: 0.625rem;

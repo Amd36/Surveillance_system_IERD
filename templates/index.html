@@ -59,7 +59,7 @@
           </div>
 
           <div class="detection-box" aria-live="polite">
-            <span class="status-label">LIVE DETECTIONS</span>
+            <span id="data-box-heading" class="status-label">LIVE DETECTIONS</span>
             <div id="detection-list" class="detection-list">
               <span class="no-detections">No detections</span>
             </div>
@@ -198,6 +198,8 @@
       function renderRecording(status) {
         const raw = status.active === 'raw';
         const ready = raw && status.state === 'ready' && status.camera.connected;
+        document.getElementById('data-box-heading').textContent = raw ? 'RECORD DATA' : 'LIVE DETECTIONS';
+        document.querySelector('.detection-box .access-summary').hidden = raw;
         recordingControls.hidden = !raw;
         detectionList.hidden = raw;
         const recording = status.camera.recording || {};
