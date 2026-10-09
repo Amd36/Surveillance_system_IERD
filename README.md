@@ -31,7 +31,7 @@ The system is designed for on‑device inference on a Raspberry Pi 5 (ARM64), us
 
 - Raspberry Pi 5 running 64-bit Raspberry Pi OS with libcamera/Picamera2
 - Raspberry Pi Camera Module or compatible Picamera2 device
-- Waveshare 7-inch 1024×600 HDMI touchscreen
+- Waveshare 7-inch 800×480 HDMI touchscreen
 - GPIO-controlled lock relay or driver circuit
 - Lock-state indicator LED
 - Network connectivity for Firebase face embeddings
@@ -50,7 +50,7 @@ the only component allowed to request a lock-state change.
 
 ```mermaid
 flowchart LR
-    UI[1024×600 kiosk UI] -->|POST /mode| MC[ModeController]
+    UI[800×480 kiosk UI] -->|POST /mode| MC[ModeController]
     UI -->|GET /status| MC
     MC --> RT[SurveillanceRuntime]
     RT --> CAM[Picamera2 capture worker]
@@ -72,9 +72,10 @@ flowchart LR
 
 | Component | Responsibility |
 |---|---|
-| `web_ui.py` | Flask routes, MJPEG response, status API, and mode-selection API |
+| `web_ui.py` | Flask routes, MJPEG response, status API, mode-selection API, and recording API |
 | `ModeController` | Serializes mode changes and prevents concurrent camera owners |
 | `SurveillanceRuntime` | Owns Picamera2, frame publication, inference workers, annotations, and metrics |
+| `raw_recording.py` | Handles Raw Feed recording, temporary takes, save, and retake |
 | `FaceDetector` | Matches faces against Firebase embeddings and produces named detections |
 | `WeaponDetector` | Runs YOLOv5 TFLite inference and produces class/confidence detections |
 | `AccessPolicyController` | Fuses face and weapon observations into lock decisions |
@@ -97,6 +98,28 @@ independently so a slow model does not block camera capture or the other worker.
 
 The configured mode is not marked ready until its camera is producing frames and
 every required inference worker has completed at least one successful pass.
+
+## Touchscreen UI and recording
+
+The UI fits an 800×480 display, keeps inference metrics in a bottom strip,
+and shows the full camera frame without cropping.
+
+In **Raw Feed** mode, the Live Detections box provides recording controls:
+
+1. **START RECORDING** begins a video without audio.
+2. **STOP RECORDING** ends the take without saving it permanently.
+3. **SAVE** keeps a timestamped H.264 MP4 in `/home/ierd/recorded_data/`.
+   **RETAKE** discards the take and starts a new recording.
+
+The directory is created automatically. Leaving Raw Feed or shutting down
+normally discards unsaved takes. Recording controls appear only in Raw Feed;
+other modes keep their existing behavior.
+
+Recording requires FFmpeg and FFprobe (`sudo apt install ffmpeg`). A dedicated
+recording worker keeps FFmpeg running after browser requests finish. Recording
+errors appear in the box and server terminal.
+
+After backend code changes, restart `python web_ui.py` and refresh the browser.
 
 ## Mode-controller finite-state machine
 

@@ -675,3 +675,27 @@ footer {
     font-size: 0.6875rem;
   }
 }
+
+/* Recording replaces the detection list only while Raw Feed is active. */
+#recording-controls {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.recording-actions {
+  display: flex;
+  gap: 5px;
+}
+.recording-actions button {
+  min-height: 44px;
+  padding: 5px;
+  font-size: 0.625rem;
+  letter-spacing: 0.02em;
+}
+#recording-status {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.625rem;
+  overflow-wrap: anywhere;
+}

@@ -82,6 +82,18 @@ def change_mode() -> Response:
     ), 202 if started else 200
 
 
+@app.post("/recording")
+def recording_action() -> Response:
+    payload = request.get_json(silent=True) or {}
+    action = payload.get("action")
+    if action not in {"start", "stop", "save", "retake"}:
+        return jsonify(error="Select a valid recording action."), 400
+    try:
+        return jsonify(recording=mode_controller.recording_action(action))
+    except Exception as error:
+        return jsonify(error=str(error)), 409
+
+
 @app.get("/status")
 def status() -> Response:
     system_status = mode_controller.status()

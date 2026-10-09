@@ -63,6 +63,14 @@
             <div id="detection-list" class="detection-list">
               <span class="no-detections">No detections</span>
             </div>
+            <div id="recording-controls" hidden>
+              <div class="recording-actions">
+                <button id="record-toggle" type="button">START RECORDING</button>
+                <button id="record-save" type="button" hidden>SAVE</button>
+                <button id="record-retake" type="button" hidden>RETAKE</button>
+              </div>
+              <span id="recording-status" role="status">Ready to record</span>
+            </div>
             <div class="access-summary">
               <strong id="access-state">LOCKED</strong>
               <span id="access-reason">Fail-secure startup</span>
@@ -178,7 +186,60 @@
         }
       }
 
+      const recordingControls = document.getElementById('recording-controls');
+      const recordToggle = document.getElementById('record-toggle');
+      const recordSave = document.getElementById('record-save');
+      const recordRetake = document.getElementById('record-retake');
+      const recordingStatus = document.getElementById('recording-status');
+      let recordingState = 'idle';
+      let recordingBusy = false;
+      let recordingError = '';
+
+      function renderRecording(status) {
+        const raw = status.active === 'raw';
+        const ready = raw && status.state === 'ready' && status.camera.connected;
+        recordingControls.hidden = !raw;
+        detectionList.hidden = raw;
+        const recording = status.camera.recording || {};
+        recordingState = recording.state || 'idle';
+        const review = recordingState === 'review';
+        recordToggle.hidden = review;
+        recordSave.hidden = !review;
+        recordRetake.hidden = !review;
+        recordToggle.textContent = recordingState === 'recording' ? 'STOP RECORDING' : 'START RECORDING';
+        recordToggle.classList.toggle('working', recordingState === 'recording');
+        [recordToggle, recordSave, recordRetake].forEach(button => button.disabled = !ready || recordingBusy);
+        recordingStatus.textContent = recordingError || (recordingState === 'recording'
+          ? `Recording · ${Number(recording.elapsed || 0).toFixed(0)}s`
+          : recording.message || 'Waiting for Raw Feed');
+        recordingStatus.title = recordingStatus.textContent;
+      }
+
+      async function recordingAction(action) {
+        if (recordingBusy) return;
+        recordingBusy = true;
+        recordingError = '';
+        [recordToggle, recordSave, recordRetake].forEach(button => button.disabled = true);
+        try {
+          const response = await fetch("{{ url_for('recording_action') }}", {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action }),
+          });
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.error || 'Recording request failed');
+        } catch (error) {
+          recordingError = error.message;
+        } finally {
+          recordingBusy = false;
+          updateStatus();
+        }
+      }
+      recordToggle.addEventListener('click', () => recordingAction(recordingState === 'recording' ? 'stop' : 'start'));
+      recordSave.addEventListener('click', () => recordingAction('save'));
+      recordRetake.addEventListener('click', () => recordingAction('retake'));
+
       function renderStatus(status) {
+        renderRecording(status);
         const camera = status.camera;
         const access = status.access || {};
         const transitioning = transitioningStates.has(status.state);
@@ -256,6 +317,7 @@
           if (!response.ok) throw new Error('Status request failed');
           renderStatus(await response.json());
         } catch (error) {
+          [recordToggle, recordSave, recordRetake].forEach(button => button.disabled = true);
           fpsValue.textContent = '--';
           wifiIndicator.classList.add('disconnected');
           setFeedUnavailable('SERVER OFFLINE', 'Waiting for the surveillance service.', true);

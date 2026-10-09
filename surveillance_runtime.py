@@ -8,6 +8,8 @@ from typing import Any, Callable, Optional
 import cv2
 import yaml
 
+from raw_recording import RawRecorder
+
 import lock_control
 from face_recognition_live import (
     FaceDetector,
@@ -296,6 +298,7 @@ class SurveillanceRuntime:
         self.progress = progress or (lambda _state, _message: None)
 
         self.camera = None
+        self.recorder = None
         self.face_detector: Optional[FaceDetector] = None
         self.weapon_detector: Optional[WeaponDetector] = None
 
@@ -405,6 +408,8 @@ class SurveillanceRuntime:
             )
         )
         self.camera.start()
+        if self.mode == "raw":
+            self.recorder = RawRecorder(self.camera)
 
         if self.face_detector is not None:
             self._start_thread(self._face_worker, "FaceWorker")
@@ -599,6 +604,8 @@ class SurveillanceRuntime:
             )
 
     def stop(self, timeout: float = 30.0) -> None:
+        if self.recorder is not None:
+            self.recorder.close()
         self.stop_event.set()
         with self.frame_condition:
             self.frame_condition.notify_all()
@@ -667,6 +674,7 @@ class SurveillanceRuntime:
                 })
 
         return {
+            "recording": self.recorder.status() if self.recorder else None,
             "connected": self.ready_event.is_set() and not self.failure_event.is_set(),
             "error": self.error,
             "fps": round(self.capture_fps, 1),
@@ -822,6 +830,15 @@ class ModeController:
                 else runtime_error
             )
             self.message = "Active mode failed"
+
+    def recording_action(self, action):
+        with self._mutex:
+            runtime = self.runtime
+            if (self._closed or self.state != "ready" or self.active_mode != "raw"
+                    or runtime is None or runtime.recorder is None
+                    or runtime.failure_event.is_set()):
+                raise RuntimeError("Recording is available only when Raw Feed is ready")
+            return runtime.recorder.action(action)
 
     def ready_runtime(self) -> Optional[SurveillanceRuntime]:
         with self._mutex:
