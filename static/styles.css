@@ -204,7 +204,7 @@ h1 {
   height: 100%;
   min-width: 0;
   min-height: 0;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .feed-label {
@@ -559,5 +559,119 @@ footer {
 
   .wifi-text {
     display: none;
+  }
+}
+
+/* Reserve the bottom row for metrics, independently of panel content. */
+.brand-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.attribution {
+  display: block;
+  color: var(--muted);
+  font-size: 0.625rem;
+}
+
+.metrics {
+  grid-template-columns: 1.4fr 1fr 1fr 1.4fr;
+}
+
+.metrics dt {
+  font-size: 0.625rem;
+}
+
+.metrics dd {
+  font-size: 0.75rem;
+}
+
+.control-panel {
+  display: grid;
+  grid-template-rows: auto auto 44px 44px 82px minmax(0, 1fr);
+}
+
+.mode-status {
+  min-height: 0;
+}
+
+.mode-status > span:last-child {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
+.detection-box {
+  min-height: 0;
+}
+
+.detection-box > .status-label,
+.access-summary {
+  flex-shrink: 0;
+}
+
+/* Landscape touchscreen: keep controls and metrics in reserved rows. */
+@media (max-width: 900px) and (max-height: 600px) {
+  .screen {
+    padding: 8px;
+    gap: 6px;
+    grid-template-rows: 40px minmax(0, 1fr) 50px;
+  }
+
+  .header-bar {
+    min-height: 0;
+    padding-bottom: 4px;
+  }
+
+  .workspace {
+    grid-template-columns: minmax(0, 1fr) 200px;
+    gap: 8px;
+  }
+
+  .control-panel {
+    padding: 8px;
+    gap: 6px;
+    grid-template-rows: 20px 14px 44px 44px 78px minmax(0, 1fr);
+  }
+
+  .control-panel label,
+  .status-label,
+  .panel-heading {
+    font-size: 0.6875rem;
+  }
+
+  select {
+    font-size: 0.8125rem;
+  }
+
+  button {
+    font-size: 0.75rem;
+  }
+
+  .mode-status > span:last-child,
+  .detection-list div,
+  .no-detections,
+  .access-summary strong {
+    font-size: 0.6875rem;
+  }
+
+  .detection-list div > span,
+  .access-summary span {
+    font-size: 0.625rem;
+  }
+
+  .metrics div {
+    padding: 5px 8px;
+  }
+
+  .metrics dd {
+    margin-top: 3px;
+  }
+
+  .fps-indicator,
+  .live-indicator,
+  .wifi-indicator,
+  .feed-label {
+    font-size: 0.6875rem;
   }
 }

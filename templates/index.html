@@ -10,7 +10,10 @@
     <main class="screen">
       <header class="header-bar">
         <div class="brand-mark" aria-hidden="true"></div>
-        <h1>Intelligent Surveillance System</h1>
+        <div class="brand-title">
+          <h1>Intelligent Surveillance System</h1>
+          <span class="attribution">Made by AMD36</span>
+        </div>
         <div class="fps-indicator" aria-label="Camera capture rate">
           <span id="fps-value">--</span> FPS
         </div>
@@ -66,28 +69,27 @@
             </div>
           </div>
 
-          <dl class="metrics">
-            <div>
-              <dt>ACTIVE</dt>
-              <dd id="active-mode">—</dd>
-            </div>
-            <div>
-              <dt>FACE</dt>
-              <dd id="face-time">—</dd>
-            </div>
-            <div>
-              <dt>WEAPON</dt>
-              <dd id="weapon-time">—</dd>
-            </div>
-            <div>
-              <dt>LOCK</dt>
-              <dd id="lock-state">UNKNOWN</dd>
-            </div>
-          </dl>
         </aside>
       </div>
 
-      <footer>Made by AMD36</footer>
+      <dl class="metrics">
+        <div>
+          <dt>ACTIVE</dt>
+          <dd id="active-mode">—</dd>
+        </div>
+        <div>
+          <dt>FACE</dt>
+          <dd id="face-time">—</dd>
+        </div>
+        <div>
+          <dt>WEAPON</dt>
+          <dd id="weapon-time">—</dd>
+        </div>
+        <div>
+          <dt>LOCK</dt>
+          <dd id="lock-state">UNKNOWN</dd>
+        </div>
+      </dl>
     </main>
 
     <script>
