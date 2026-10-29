@@ -4,7 +4,7 @@ camera:
   format: RGB888
   jpeg_quality: 88
   # Both flips correct the camera module mounted upside down (180 degrees).
-  hflip: true
+  hflip: false
   vflip: true
 
 face_recognition:
@@ -34,3 +34,22 @@ lock_control:
   face_rearm_delay: 2.0
   unlock_modes:
     - full
+
+# BCM GPIO numbers; UART routing must also be enabled in the Pi boot config.
+gsm:
+  default_phone: "+8801719473555"
+  tx_pin: 14
+  rx_pin: 15
+  serial_device: /dev/ttyAMA0
+  baud_rate: 9600
+  command_timeout: 3.0
+  sms_timeout: 30.0
+  health_interval: 10.0
+  alerts:
+    enabled: true
+    sms_enabled: true
+    message: "ALERT: A weapon has been detected by the surveillance system."
+    call_enabled: false
+    call_duration: 20.0
+    cooldown: 60.0
+    clear_duration: 5.0

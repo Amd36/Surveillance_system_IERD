@@ -46,7 +46,7 @@ def index() -> str:
 @app.get("/video_feed")
 def video_feed() -> Response:
     runtime = mode_controller.ready_runtime()
-    if runtime is None:
+    if runtime is None or mode_controller.active_mode == "gsm":
         return Response(
             "The selected surveillance mode is not ready.",
             status=503,
@@ -91,6 +91,16 @@ def recording_action() -> Response:
     try:
         return jsonify(recording=mode_controller.recording_action(action))
     except Exception as error:
+        return jsonify(error=str(error)), 409
+
+
+@app.post("/gsm")
+def gsm_action() -> Response:
+    payload = request.get_json(silent=True) or {}
+    try:
+        return jsonify(gsm=mode_controller.gsm_action(
+            payload.get("action"), payload.get("phone"), payload.get("message")))
+    except (ValueError, RuntimeError) as error:
         return jsonify(error=str(error)), 409
 
 

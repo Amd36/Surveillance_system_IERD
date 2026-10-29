@@ -10,6 +10,9 @@ from camera_config import create_camera, load_system_config
 
 from raw_recording import RawRecorder
 
+from gsm_control import GSMRuntime
+from gsm_alerts import WeaponAlertWorker
+
 import lock_control
 from face_recognition_live import (
     FaceDetector,
@@ -20,8 +23,9 @@ from weapon_inference_from_camera import WeaponDetector
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-VALID_MODES = {"raw", "face", "weapon", "full"}
+VALID_MODES = {"raw", "face", "weapon", "full", "gsm"}
 MODE_LABELS = {
+    "gsm": "GSM Mode",
     "raw": "Raw Feed",
     "face": "Face Recognition",
     "weapon": "Weapon Detection",
@@ -147,10 +151,7 @@ class AccessPolicyController:
 
     def observe_weapons(self, class_names: list[str]) -> None:
         now = time.monotonic()
-        dangerous = any(
-            class_name.lower() in {"pistol", "knife"}
-            for class_name in class_names
-        )
+        dangerous = bool(class_names)
         with self._mutex:
             self.last_weapon_scan_at = now
             if not dangerous:
@@ -166,7 +167,7 @@ class AccessPolicyController:
                 return
             self.policy_state = "weapon_hold"
             self.commanded_state = "locked"
-            self.reason = "Pistol or knife detected"
+            self.reason = "Weapon detected: " + ", ".join(dict.fromkeys(class_names))
 
     def fault(self, reason: str) -> None:
         with self._mutex:
@@ -293,6 +294,7 @@ class SurveillanceRuntime:
 
         self.camera = None
         self.recorder = None
+        self.alerts = WeaponAlertWorker(config) if mode == "full" else None
         self.face_detector: Optional[FaceDetector] = None
         self.weapon_detector: Optional[WeaponDetector] = None
 
@@ -327,6 +329,8 @@ class SurveillanceRuntime:
 
     def start(self, timeout: float = 90.0) -> None:
         self._initialize_processors()
+        if self.alerts is not None:
+            self.alerts.start()
         self._start_camera_and_workers()
 
         deadline = time.monotonic() + timeout
@@ -510,6 +514,8 @@ class SurveillanceRuntime:
                     if 0 <= class_id < len(self.weapon_detector.class_names)
                 ]
                 self.lock_controller.observe_weapons(detected_classes)
+                if self.alerts is not None:
+                    self.alerts.observe(detected_classes)
                 with self.results_lock:
                     self.weapon_results = results
                     self.weapon_result_at = time.monotonic()
@@ -587,6 +593,8 @@ class SurveillanceRuntime:
         if self.recorder is not None:
             self.recorder.close()
         self.stop_event.set()
+        if self.alerts is not None:
+            self.alerts.stop_event.set()
         with self.frame_condition:
             self.frame_condition.notify_all()
         with self.output_condition:
@@ -608,6 +616,9 @@ class SurveillanceRuntime:
             raise RuntimeError(
                 "Workers did not stop safely: " + ", ".join(alive)
             )
+
+        if self.alerts is not None:
+            self.alerts.stop()
 
         if self.camera is not None:
             try:
@@ -654,6 +665,7 @@ class SurveillanceRuntime:
                 })
 
         return {
+            "gsm_alerts": self.alerts.status() if self.alerts else None,
             "recording": self.recorder.status() if self.recorder else None,
             "connected": self.ready_event.is_set() and not self.failure_event.is_set(),
             "error": self.error,
@@ -737,7 +749,8 @@ class ModeController:
                         self.active_mode = None
 
             self._update_progress("initializing", f"Initializing {MODE_LABELS[mode]}")
-            runtime = SurveillanceRuntime(
+            runtime_class = GSMRuntime if mode == "gsm" else SurveillanceRuntime
+            runtime = runtime_class(
                 mode,
                 self._config,
                 self.lock_controller,
@@ -811,6 +824,13 @@ class ModeController:
             )
             self.message = "Active mode failed"
 
+    def gsm_action(self, action, phone, message):
+        with self._mutex:
+            runtime = self.runtime
+            if self.state != "ready" or self.active_mode != "gsm" or runtime is None:
+                raise RuntimeError("GSM Mode must be active")
+            return runtime.action(action, phone, message)
+
     def recording_action(self, action):
         with self._mutex:
             runtime = self.runtime
@@ -864,6 +884,7 @@ class ModeController:
             "face_inference_ms": None,
             "weapon_inference_ms": None,
         }
+        status["gsm"] = camera_status.pop("gsm", {"default_phone": self._config.get("gsm", {}).get("default_phone", "+8801719473555")})
         status["camera"] = camera_status
         return status
 

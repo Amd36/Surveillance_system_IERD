@@ -58,6 +58,15 @@
             <span id="mode-message">Preparing Raw Feed</span>
           </div>
 
+          <div id="gsm-controls" hidden>
+            <label for="gsm-phone">Phone number</label>
+            <input id="gsm-phone" type="tel" inputmode="tel" autocomplete="tel" maxlength="16">
+            <label for="gsm-text">SMS text (English)</label>
+            <textarea id="gsm-text" maxlength="160" rows="2" placeholder="Enter SMS text"></textarea>
+            <button id="gsm-send" type="button">SEND MESSAGE</button>
+            <button id="gsm-call" type="button">CALL</button>
+            <span id="gsm-result" role="status"></span>
+          </div>
           <div class="detection-box" aria-live="polite">
             <span id="data-box-heading" class="status-label">LIVE DETECTIONS</span>
             <div id="detection-list" class="detection-list">
@@ -71,6 +80,7 @@
               </div>
               <span id="recording-status" role="status">Ready to record</span>
             </div>
+            <span id="gsm-alert-status" role="status" hidden></span>
             <div class="access-summary">
               <strong id="access-state">LOCKED</strong>
               <span id="access-reason">Fail-secure startup</span>
@@ -240,12 +250,59 @@
       recordSave.addEventListener('click', () => recordingAction('save'));
       recordRetake.addEventListener('click', () => recordingAction('retake'));
 
+      const gsmPhone = document.getElementById('gsm-phone');
+      const gsmText = document.getElementById('gsm-text');
+      const gsmSend = document.getElementById('gsm-send');
+      const gsmCall = document.getElementById('gsm-call');
+      const gsmResult = document.getElementById('gsm-result');
+      let gsmBusy = false;
+      let gsmCalling = false;
+      let gsmError = '';
+      let phoneInitialized = false;
+      async function gsmAction(action) {
+        if (gsmBusy) return;
+        gsmBusy = true;
+        gsmError = '';
+        gsmSend.disabled = gsmCall.disabled = true;
+        gsmResult.textContent = 'Working…';
+        try {
+          const response = await fetch("{{ url_for('gsm_action') }}", {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({action, phone: gsmPhone.value.trim(), message: gsmText.value}),
+          });
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.error || 'GSM request failed');
+        } catch (error) { gsmError = error.message; }
+        finally { gsmBusy = false; updateStatus(); }
+      }
+      gsmSend.addEventListener('click', () => gsmAction('sms'));
+      gsmCall.addEventListener('click', () => gsmAction(gsmCalling ? 'hangup' : 'call'));
+
       function renderStatus(status) {
         renderRecording(status);
         const camera = status.camera;
         const access = status.access || {};
         const transitioning = transitioningStates.has(status.state);
-        const ready = status.state === 'ready' && camera.connected;
+        const alertStatus = document.getElementById('gsm-alert-status');
+        const alerts = camera.gsm_alerts;
+        alertStatus.hidden = status.active !== 'full' || !alerts;
+        alertStatus.textContent = alerts ? `GSM ALERT · ${alerts.state}: ${alerts.message}` : '';
+        alertStatus.title = alertStatus.textContent;
+        const gsm = status.gsm || {};
+        const gsmMode = status.active === 'gsm' || status.requested === 'gsm' && status.state !== 'ready';
+        document.querySelector('.screen').classList.toggle('gsm-mode', gsmMode);
+        document.getElementById('gsm-controls').hidden = !gsmMode;
+        document.querySelector('.detection-box').hidden = gsmMode;
+        if (!phoneInitialized && gsm.default_phone) {
+          gsmPhone.value = gsm.default_phone;
+          phoneInitialized = true;
+        }
+        const ready = status.state === 'ready' && (gsmMode ? gsm.connected : camera.connected);
+        gsmCalling = Boolean(gsm.call_active);
+        gsmCall.textContent = gsmCalling ? 'HANG UP' : 'CALL';
+        gsmSend.disabled = !gsmMode || !ready || gsmBusy || gsmCalling;
+        gsmCall.disabled = !gsmMode || !ready || gsmBusy;
+        gsmResult.textContent = gsmBusy ? 'Working…' : gsmError || gsm.message || 'Waiting for GSM Mode';
         const failed = status.state === 'error';
 
         if (!selectionTouched && status.requested) {
@@ -271,7 +328,7 @@
           enableButton.textContent = 'ENABLE MODE';
         }
 
-        modeState.textContent = status.state.toUpperCase();
+        modeState.textContent = gsmMode && ready ? 'ACTIVE' : status.state.toUpperCase();
         modeMessage.textContent = status.error || status.message;
         stateDot.className = `state-dot ${status.state}`;
         activeMode.textContent = status.active_label || '—';
@@ -295,7 +352,13 @@
           ? 'Wi-Fi connected'
           : 'Wi-Fi disconnected';
 
-        if (ready) {
+        if (ready && gsmMode) {
+          if (feed.hasAttribute('src')) feed.removeAttribute('src');
+          streamMode = null;
+          fpsValue.textContent = '--';
+          liveIndicator.classList.add('offline');
+          setFeedUnavailable('GSM MODULE ACTIVE', `${gsm.device} · ${gsm.baud_rate} baud · AT OK. ${gsm.message || ''}`);
+        } else if (ready) {
           cameraError.hidden = true;
           feed.hidden = false;
           if (streamMode !== status.active || !feed.src) {
@@ -319,7 +382,7 @@
           if (!response.ok) throw new Error('Status request failed');
           renderStatus(await response.json());
         } catch (error) {
-          [recordToggle, recordSave, recordRetake].forEach(button => button.disabled = true);
+          [recordToggle, recordSave, recordRetake, gsmSend, gsmCall].forEach(button => button.disabled = true);
           fpsValue.textContent = '--';
           wifiIndicator.classList.add('disconnected');
           setFeedUnavailable('SERVER OFFLINE', 'Waiting for the surveillance service.', true);

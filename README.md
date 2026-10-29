@@ -154,9 +154,9 @@ stateDiagram-v2
     FacePending --> Unlocked: required confirmations and fresh safe weapon scan
     FacePending --> Locked: confirmation expires
     Unlocked --> Locked: access window expires
-    Locked --> WeaponHold: pistol or knife detected
-    FacePending --> WeaponHold: pistol or knife detected
-    Unlocked --> WeaponHold: pistol or knife detected
+    Locked --> WeaponHold: any configured weapon detected
+    FacePending --> WeaponHold: any configured weapon detected
+    Unlocked --> WeaponHold: any configured weapon detected
     WeaponHold --> Locked: hold expires; fresh face required
     Locked --> Fault: camera, inference, or GPIO failure
     FacePending --> Fault: camera, inference, or GPIO failure
@@ -173,7 +173,7 @@ stateDiagram-v2
 - A successful authorization opens the lock for five seconds.
 - The same continuously visible face cannot repeatedly reopen the lock. Face
   authorization rearms after the face has been absent for two seconds.
-- A pistol or knife observation closes the lock immediately from any access
+- Any configured weapon-class observation closes the lock immediately from any access
   state and refreshes a ten-second weapon hold.
 - When the weapon hold expires, the system remains closed and requires a new
   face authorization.
@@ -199,3 +199,107 @@ The UI represents access state as:
 
 The displayed value is the state commanded by software. Confirming that the
 physical mechanism actually moved requires a separate lock-position sensor.
+
+## GSM Mode (SIM808)
+
+Select **GSM Mode**, then **ENABLE MODE**. This standalone test stops the camera
+pipeline and does not grant door access. It opens the configured UART and requires
+an exact `AT` / `OK` exchange before showing **ACTIVE**. A SIM is not required for
+this check. The UART is checked periodically; connection failure enters the normal
+mode failure/retry workflow.
+
+`config/system_config.yaml` contains the `gsm` settings: default phone number,
+BCM TX/RX pins, serial device, baud rate, command/SMS timeouts and health interval.
+The confirmed Raspberry Pi 5 setup uses `/dev/ttyAMA0`, 9600 baud, TX GPIO14
+(physical pin 8) and RX GPIO15 (physical pin 10). Connect Pi TX to module RX,
+Pi RX to module TX, and common ground. GPIO settings document the supported
+14/15 pair; changing YAML does not configure OS UART routing. Existing Pi boot
+configuration must enable this UART (`dtparam=uart0=on`).
+
+Install the added dependency in the environment used by the web service:
+
+```bash
+cd /home/ierd/Surveillance_2.0/Surveillance_system_IERD
+venv/bin/python -m pip install 'pyserial>=3.5,<4.0'
+```
+
+Restart the running web application and refresh Chromium. If using systemd,
+check `systemctl cat surveillance-web` first: the supplied deployment template
+uses an older repository location, so ensure your actual service launches this
+checkout. The service user needs read/write permission on the UART (usually
+membership in `dialout`; a new login or service restart is needed after adding it).
+
+### Final hardware diagnosis
+
+1. With the module powered and no SIM installed, enable GSM Mode. Expect
+   **ACTIVE**, **AT OK**, `/dev/ttyAMA0` and **9600 baud** in the main area.
+2. Try **SEND MESSAGE**. Expect a SIM readiness error, while the module remains
+   active. The default phone number should be `+8801719473555`.
+3. Tap the phone and message fields and test your OS on-screen keyboard in
+   Chromium kiosk. These are standard HTML inputs; keyboard availability and
+   automatic appearance depend on desktop configuration. No embedded keyboard
+   is installed by this change. The right panel scrolls to keep controls reachable.
+4. With power off, install a working SIM, then power on. After network registration,
+   send a short English test SMS. A successful submission confirms network
+   acceptance, not delivery to the recipient. Text is limited to 160 printable
+   ASCII characters on one line; non-English text and control characters are rejected.
+5. Press **CALL**, confirm the destination rings, then **HANG UP**. The UI reports
+   dialing acceptance; voice audio requires the module's microphone/speaker wiring.
+6. Switch to another mode during a call: the call should end and UART close.
+   Return to GSM Mode and confirm it starts again. Removing module power while
+   active should produce **MODE FAILED** after the health check timeout.
+
+Run simulated tests without a SIM or UART:
+
+```bash
+venv/bin/python -m unittest discover -s tests -v
+```
+
+
+## Automatic weapon alerts in Full System
+
+Full System now opens a shared GSM connection in a background worker. Every
+configured detector class (including pistol, rifle and knife) triggers the lock
+weapon hold and can queue an SMS to `gsm.default_phone`. Other camera modes do
+not send automatic alerts. Standalone GSM Mode retains its manual controls.
+
+Configure `gsm.alerts` in `config/system_config.yaml`:
+
+- `enabled`: enable automatic alerts in Full System.
+- `sms_enabled`: send the configured `message` (1–160 printable English ASCII characters).
+- `call_enabled`: optionally dial the same number after the SMS attempt; defaults
+  to **false**. Calling is attempted even if the SMS fails.
+- `call_duration`: seconds before automatically hanging up an accepted call.
+- `cooldown`: minimum seconds between alert attempts (default 60).
+- `clear_duration`: consecutive seconds of successful weapon-free scans before
+  another detection episode can trigger an alert (default 5). Stale scan gaps
+  do not count as clear time.
+
+A continuous detection sends one alert attempt, rather than one per frame. A new
+weapon episode detected during cooldown can trigger once cooldown expires if it
+is still being detected. Failed attempts consume the cooldown too and require
+rearming; they do not retry continuously. Mode changes reset episode/cooldown
+tracking. SMS submission confirms network acceptance, not recipient delivery.
+
+The Full System detection panel shows GSM readiness and the latest alert result.
+Missing SIM, network errors, or disconnected UART do not stop camera processing
+or lock protection. GSM initialization/reconnection failures require leaving and
+re-enabling Full System after correcting the problem. Serial commands run in a
+separate worker; shutdown cancels queued alerts, ends any call, and waits for an
+in-progress bounded modem operation before releasing the UART.
+
+### Hardware verification for automatic alerts
+
+1. Restart the application, refresh the UI, and enable Full System. With no SIM,
+   expect GSM readiness from AT OK; present a configured weapon class and expect
+   a visible SMS error while video/detection continue.
+2. With a working SIM/network, present each configured class in separate episodes.
+   Confirm the configured SMS reaches the default phone and the lock remains held.
+3. Keep a detection visible beyond 60 seconds: it should not repeatedly alert.
+   Clear the scene for at least five seconds, wait until the cooldown has elapsed,
+   then present a weapon again to trigger another alert.
+4. To test optional calling, set `call_enabled: true`, restart, and trigger a new
+   episode. Expect an SMS attempt followed by dialing and automatic hangup after
+   `call_duration`. Restore `false` and restart when finished.
+5. Switch away from Full System during an alert/call and verify resource cleanup;
+   GSM Mode should subsequently open the same UART normally.

@@ -7,3 +7,4 @@ opencv-python==4.6.0.66
 tflite-runtime==2.14.0
 Flask>=3.0,<4.0
 PyYAML>=6.0,<7.0
+pyserial>=3.5,<4.0
