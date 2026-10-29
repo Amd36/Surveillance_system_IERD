@@ -3,6 +3,9 @@ camera:
   height: 720
   format: RGB888
   jpeg_quality: 88
+  # Both flips correct the camera module mounted upside down (180 degrees).
+  hflip: true
+  vflip: true
 
 face_recognition:
   poll_interval: 0.5

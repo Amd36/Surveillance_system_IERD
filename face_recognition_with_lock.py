@@ -6,7 +6,7 @@ from firebase_admin import credentials, db
 import numpy as np
 import face_recognition
 import cv2
-from picamera2 import Picamera2
+from camera_config import create_camera
 
 LOCK_PIN = 23
 GPIO.setmode(GPIO.BCM)
@@ -48,10 +48,7 @@ def trigger_lock(name="Unknown"):
 # Function to run real-time face recognition with FPS display
 def run_face_recognition(known_face_encodings, known_face_names):
     # Initialize Picamera2
-    picam2 = Picamera2()
-    picam2.preview_configuration.main.size = (640, 480)
-    picam2.preview_configuration.main.format = "RGB888"
-    picam2.configure("preview")
+    picam2 = create_camera()
     picam2.start()
 
     print("Starting real-time face recognition... Press 'q' to exit.")

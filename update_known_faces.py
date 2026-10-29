@@ -5,7 +5,7 @@ import face_recognition
 import json
 import firebase_admin
 from firebase_admin import credentials, db
-from picamera2 import Picamera2
+from camera_config import create_camera
 
 # Function to initialize Firebase
 def initialize_firebase_app():
@@ -18,10 +18,7 @@ def initialize_firebase_app():
 
 # Function to capture an image with a countdown
 def capture_image():
-    picam2 = Picamera2()
-    picam2.preview_configuration.main.size = (640, 480)
-    picam2.preview_configuration.main.format = "RGB888"
-    picam2.configure("preview")
+    picam2 = create_camera()
     picam2.start()
 
     person_name = input("Enter the person's name: ")

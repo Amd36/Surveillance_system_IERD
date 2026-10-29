@@ -7,7 +7,7 @@ from firebase_admin import credentials, db
 import numpy as np
 import face_recognition
 import cv2
-from picamera2 import Picamera2
+from camera_config import create_camera
 
 
 # Function to initialize Firebase app
@@ -50,11 +50,10 @@ class FaceDetector:
     - show_feed(): open camera, run loop, display scaled frames
     """
 
-    def __init__(self, known_face_encodings=None, known_face_names=None, display_scale=0.5, camera_size=(640, 480)):
+    def __init__(self, known_face_encodings=None, known_face_names=None, display_scale=0.5):
         self.known_face_encodings = known_face_encodings or []
         self.known_face_names = known_face_names or []
         self.display_scale = display_scale
-        self.camera_size = camera_size
         self.picam2 = None
 
     def detect(self, rgb_frame):
@@ -90,18 +89,7 @@ class FaceDetector:
 
     def show_feed(self):
         """Start Picamera2 and show live annotated feed. Press 'q' to quit."""
-        self.picam2 = Picamera2()
-        try:
-            self.picam2.preview_configuration.main.size = self.camera_size
-            self.picam2.preview_configuration.main.format = "RGB888"
-            self.picam2.configure("preview")
-        except Exception:
-            # Fallback: try configure without specifying preview
-            try:
-                self.picam2.configure()
-            except Exception:
-                pass
-
+        self.picam2 = create_camera()
         self.picam2.start()
 
         print("Starting real-time face recognition... Press 'q' to exit.")

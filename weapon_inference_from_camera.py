@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
 import tflite_runtime.interpreter as tflite
-from picamera2 import Picamera2
+from camera_config import create_camera
 
 
 class WeaponDetector:
@@ -160,18 +160,7 @@ class WeaponDetector:
         cv2.imshow(window_name, small)
 
     def run_camera_loop(self):
-        picam2 = Picamera2()
-        try:
-            picam2.preview_configuration.main.size = (1080, 720)
-            picam2.preview_configuration.main.format = "RGB888"
-            picam2.configure("preview")
-        except Exception:
-            # Fallback: try configure without changing preview config
-            try:
-                picam2.configure()
-            except Exception:
-                pass
-
+        picam2 = create_camera()
         picam2.start()
 
         try:

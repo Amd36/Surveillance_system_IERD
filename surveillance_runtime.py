@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import cv2
-import yaml
+from camera_config import create_camera, load_system_config
 
 from raw_recording import RawRecorder
 
@@ -20,7 +20,6 @@ from weapon_inference_from_camera import WeaponDetector
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-CONFIG_PATH = PROJECT_ROOT / "config" / "system_config.yaml"
 VALID_MODES = {"raw", "face", "weapon", "full"}
 MODE_LABELS = {
     "raw": "Raw Feed",
@@ -28,11 +27,6 @@ MODE_LABELS = {
     "weapon": "Weapon Detection",
     "full": "Full System",
 }
-
-
-def load_system_config() -> dict[str, Any]:
-    with CONFIG_PATH.open(encoding="utf-8") as config_file:
-        return yaml.safe_load(config_file) or {}
 
 
 class AccessPolicyController:
@@ -391,22 +385,8 @@ class SurveillanceRuntime:
         return candidate if candidate.is_absolute() else PROJECT_ROOT / candidate
 
     def _start_camera_and_workers(self) -> None:
-        from picamera2 import Picamera2
-
         self.progress("starting", "Starting camera and inference workers")
-        camera_config = self.config.get("camera", {})
-        size = (
-            int(camera_config.get("width", 1280)),
-            int(camera_config.get("height", 720)),
-        )
-        pixel_format = str(camera_config.get("format", "RGB888"))
-
-        self.camera = Picamera2()
-        self.camera.configure(
-            self.camera.create_preview_configuration(
-                main={"size": size, "format": pixel_format}
-            )
-        )
+        self.camera = create_camera(self.config)
         self.camera.start()
         if self.mode == "raw":
             self.recorder = RawRecorder(self.camera)

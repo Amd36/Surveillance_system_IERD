@@ -1,15 +1,9 @@
 import cv2
-from picamera2 import Picamera2, Preview
+from camera_config import create_camera
 import numpy as np
 
-# Initialize the Picamera2 instance
-picam2 = Picamera2()
-
-# Create configuration for capturing in RGB888 format
-config = picam2.create_preview_configuration({"format": "RGB888"})
-
-# Apply the configuration
-picam2.configure(config)
+# Load stream dimensions, format, and orientation from system_config.yaml.
+picam2 = create_camera()
 
 # Start the camera
 picam2.start()
